@@ -1,0 +1,264 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Public non-PII learner profile for STEM Saathi.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "preferredLanguage": {
+          "type": "string",
+          "enum": ["en", "hi", "kn"]
+        },
+        "role": {
+          "type": "string",
+          "enum": ["student", "teacher", "admin"]
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["uid", "displayName", "preferredLanguage", "role", "updatedAt"]
+    },
+    "UserPrivateInfo": {
+      "title": "UserPrivateInfo",
+      "description": "Isolated PII document storing user email.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "email": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 160
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["uid", "email", "updatedAt"]
+    },
+    "LearningProgress": {
+      "title": "LearningProgress",
+      "description": "Student STEM XP, streaks, completed labs, quiz scores, and game high score.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "xp": {
+          "type": "number"
+        },
+        "streakDays": {
+          "type": "number"
+        },
+        "completedModules": {
+          "type": "array"
+        },
+        "quizScores": {
+          "type": "object"
+        },
+        "savedOfflineIds": {
+          "type": "array"
+        },
+        "dailyChallengeDone": {
+          "type": "boolean"
+        },
+        "labReadingsCount": {
+          "type": "number"
+        },
+        "gameHighScore": {
+          "type": "number"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "uid",
+        "xp",
+        "streakDays",
+        "completedModules",
+        "quizScores",
+        "savedOfflineIds",
+        "dailyChallengeDone",
+        "labReadingsCount",
+        "gameHighScore",
+        "updatedAt"
+      ]
+    },
+    "TeacherAssignment": {
+      "title": "TeacherAssignment",
+      "description": "Classroom STEM assignments published by educators.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "authorUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 140
+        },
+        "subject": {
+          "type": "string",
+          "enum": ["Physics", "Chemistry", "Biology", "Mathematics"]
+        },
+        "targetGrade": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 40
+        },
+        "dueDate": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 20
+        },
+        "completionRate": {
+          "type": "number"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "authorUid",
+        "title",
+        "subject",
+        "targetGrade",
+        "dueDate",
+        "completionRate",
+        "createdAt"
+      ]
+    },
+    "MyLearningState": {
+      "title": "MyLearningState",
+      "description": "Student board/class profile, completed chapters, studied topics, experiments, bookmarks, recents, chapter quiz scores, and study seconds.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "classLevel": {
+          "type": "integer",
+          "minimum": 6,
+          "maximum": 12
+        },
+        "board": {
+          "type": "string",
+          "enum": ["cbse", "cisce", "state", "other"]
+        },
+        "stateName": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "session": {
+          "type": "string",
+          "enum": ["2025-26", "2024-25"]
+        },
+        "configured": {
+          "type": "boolean"
+        },
+        "completedChapterIds": {
+          "type": "array"
+        },
+        "studiedTopicIds": {
+          "type": "array"
+        },
+        "completedExperimentIds": {
+          "type": "array"
+        },
+        "bookmarkedTopicIds": {
+          "type": "array"
+        },
+        "recentChapterIds": {
+          "type": "array"
+        },
+        "chapterQuizScores": {
+          "type": "object"
+        },
+        "learningTimeSeconds": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 36000000
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "uid",
+        "classLevel",
+        "board",
+        "stateName",
+        "session",
+        "configured",
+        "completedChapterIds",
+        "studiedTopicIds",
+        "completedExperimentIds",
+        "bookmarkedTopicIds",
+        "recentChapterIds",
+        "chapterQuizScores",
+        "learningTimeSeconds",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}/public/profile": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "User public STEM profile (language, role, display name)"
+    },
+    "/users/{userId}/private/info": {
+      "schema": { "$ref": "#/entities/UserPrivateInfo" },
+      "description": "Owner-only PII record containing user email"
+    },
+    "/users/{userId}/progress/main": {
+      "schema": { "$ref": "#/entities/LearningProgress" },
+      "description": "Owner-only STEM learning progress, XP, and game score"
+    },
+    "/users/{userId}/learning/state": {
+      "schema": { "$ref": "#/entities/MyLearningState" },
+      "description": "Owner-only My Learning class/board selection and chapter/topic/experiment/quiz progress"
+    },
+    "/assignments/{assignmentId}": {
+      "schema": { "$ref": "#/entities/TeacherAssignment" },
+      "description": "Classroom STEM assignments authored by verified users"
+    }
+  }
+}

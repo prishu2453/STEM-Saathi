@@ -1,0 +1,739 @@
+import React, { useEffect, useRef, useState } from 'react';
+import {
+  ExternalLink,
+  Globe,
+  Mic,
+  RotateCcw,
+  Send,
+  Sparkles,
+  Square,
+  Volume2,
+  X,
+} from 'lucide-react';
+import { UI_TEXT } from '../data/i18n';
+import { useAudioTranscriber } from '../hooks/useAudioTranscriber';
+import { useOnlineStatus } from '../hooks/useOnlineStatus';
+import { NATURAL_VOICE_OPTIONS, useTeacherVoice } from '../hooks/useTeacherVoice';
+import type { ChatSource, Language, MentorTier } from '../types/stem';
+
+interface AIMentorDrawerProps {
+  open: boolean;
+  onClose: () => void;
+  language: Language;
+  initialSubject?: string;
+  initialPrompt?: string;
+  experimentContext?: string;
+}
+
+interface ChatMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  text: string;
+  modelLabel?: string;
+  sources?: ChatSource[];
+}
+
+const TIER_OPTIONS: { id: MentorTier; label: string; hint: string }[] = [
+  { id: 'fast', label: 'Fast · Flash Lite', hint: 'Quick answers & definitions' },
+  { id: 'general', label: 'Balanced · Hydrogen', hint: 'Everyday STEM tutoring' },
+  { id: 'complex', label: 'Complex · Argon', hint: 'Multi-step physics & math' },
+  { id: 'deep', label: 'Deep · Carbon', hint: 'Deep scientific reasoning & proofs' },
+  { id: 'search', label: 'Google Search · Hydrogen', hint: 'Live web-grounded facts' },
+];
+
+const MENTOR_ROLES = [
+  'Concept Tutor',
+  'Numerical Problem Coach',
+  'Virtual Lab Instructor',
+  'Science Research Assistant',
+];
+
+const STARTER_PROMPTS = [
+  {
+    text: 'Why is horizontal range maximum at 45 degrees in projectile motion?',
+    search: false,
+  },
+  {
+    text: "Explain Faraday's Law of electromagnetic induction with a real-world example.",
+    search: false,
+  },
+  {
+    text: 'What are the latest recent discoveries by ISRO or NASA in space physics this year?',
+    search: true,
+  },
+  {
+    text: 'Compare nuclear fusion breakthroughs and current tokamak milestones.',
+    search: true,
+  },
+];
+
+const FormattedMessage: React.FC<{ text: string }> = ({ text }) => {
+  const lines = text.split('\n');
+
+  const renderInline = (line: string) => {
+    const parts = line.split(/(\*\*[^*]+\*\*|`[^`]+`)/g);
+    return parts.map((part, idx) => {
+      if (part.startsWith('**') && part.endsWith('**')) {
+        return (
+          <strong key={idx} className="font-semibold text-[#17324D] dark:text-white">
+            {part.slice(2, -2)}
+          </strong>
+        );
+      }
+      if (part.startsWith('`') && part.endsWith('`')) {
+        return (
+          <code
+            key={idx}
+            className="rounded bg-[#F6F1E3] dark:bg-[#1C3652] px-1 py-0.5 font-mono text-[11px] text-[#0B5F58] dark:text-[#4AD1C6]"
+          >
+            {part.slice(1, -1)}
+          </code>
+        );
+      }
+      return <React.Fragment key={idx}>{part}</React.Fragment>;
+    });
+  };
+
+  return (
+    <div className="space-y-1.5">
+      {lines.map((rawLine, idx) => {
+        const line = rawLine.trim();
+        if (!line) return <div key={idx} className="h-1" />;
+        if (line === '---' || line === '***') {
+          return <hr key={idx} className="border-[#E6DEC8] dark:border-[#284766] my-1.5" />;
+        }
+        if (line.startsWith('### ')) {
+          return (
+            <h4 key={idx} className="text-xs font-bold text-[#17324D] dark:text-white pt-1">
+              {renderInline(line.slice(4))}
+            </h4>
+          );
+        }
+        if (line.startsWith('## ')) {
+          return (
+            <h3 key={idx} className="text-sm font-bold text-[#17324D] dark:text-white pt-1">
+              {renderInline(line.slice(3))}
+            </h3>
+          );
+        }
+        if (line.startsWith('* ') || line.startsWith('- ')) {
+          return (
+            <div key={idx} className="flex items-start gap-1.5 pl-1">
+              <span className="text-[#0F766E] dark:text-[#4AD1C6] mt-0.5">•</span>
+              <span>{renderInline(line.replace(/^[-*]\s+/, ''))}</span>
+            </div>
+          );
+        }
+        return <p key={idx}>{renderInline(rawLine)}</p>;
+      })}
+    </div>
+  );
+};
+
+export const AIMentorDrawer: React.FC<AIMentorDrawerProps> = ({
+  open,
+  onClose,
+  language,
+  initialSubject = 'Physics',
+  initialPrompt = '',
+  experimentContext,
+}) => {
+  const t = UI_TEXT[language];
+  const isOnline = useOnlineStatus();
+  const voice = useTeacherVoice(language);
+  const isSpeaking = voice.speaking;
+  const speak = voice.speak;
+  const stopSpeaking = voice.stop;
+  const [autoSpeak, setAutoSpeak] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('stem-saathi-mentor-autospeak') === '1';
+    } catch {
+      return false;
+    }
+  });
+  const toggleAutoSpeak = () => {
+    const next = !autoSpeak;
+    setAutoSpeak(next);
+    if (!next) voice.stop();
+    try {
+      localStorage.setItem('stem-saathi-mentor-autospeak', next ? '1' : '0');
+    } catch {
+      // storage unavailable
+    }
+  };
+  const {
+    isRecording,
+    isTranscribing,
+    transcribeError,
+    startRecording,
+    stopRecording,
+  } = useAudioTranscriber(language);
+
+  const [subject, setSubject] = useState(initialSubject);
+  const [level, setLevel] = useState('Secondary (Grades 9-12)');
+  const [mentorRole, setMentorRole] = useState(MENTOR_ROLES[0]);
+  const [tier, setTier] = useState<MentorTier>('fast');
+  const [useSearch, setUseSearch] = useState(false);
+  const [input, setInput] = useState(initialPrompt);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [lastFailedQuery, setLastFailedQuery] = useState<string | null>(null);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const feedEndRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (initialSubject) setSubject(initialSubject);
+    if (initialPrompt) setInput(initialPrompt);
+  }, [initialSubject, initialPrompt]);
+
+  useEffect(() => {
+    feedEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages, loading]);
+
+  if (!open) return null;
+
+  const sendMessage = async (
+    textToSend?: string,
+    forceSearch?: boolean,
+    overrideTier?: MentorTier
+  ) => {
+    const query = (textToSend ?? input).trim();
+    if (!query || loading) return;
+
+    const effectiveTier = overrideTier ?? tier;
+    const searchActive = forceSearch ?? (effectiveTier === 'search' || (overrideTier ? false : useSearch));
+    const priorHistory = messages.slice(-14).map((m) => ({
+      role: m.role,
+      text: m.text,
+    }));
+
+    const shouldAppendUser = !lastFailedQuery || lastFailedQuery !== query;
+    if (shouldAppendUser) {
+      const userMsg: ChatMessage = { id: `u-${Date.now()}`, role: 'user', text: query };
+      setMessages((prev) => [...prev, userMsg]);
+    }
+    if (!textToSend) setInput('');
+
+    setLoading(true);
+    setError(null);
+    setLastFailedQuery(null);
+
+    try {
+      const res = await fetch('/api/mentor/ask', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: query,
+          subject,
+          language,
+          level,
+          tier: effectiveTier,
+          mentorRole,
+          useSearch: searchActive,
+          history: priorHistory,
+          experimentContext: experimentContext || undefined,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Unable to connect to AI Mentor.');
+      }
+
+      const activeTierLabel = data.provider
+        ? `${data.provider} · ${data.model}`
+        : searchActive
+          ? 'Google Search · gemini-4-hydrogen'
+          : TIER_OPTIONS.find((opt) => opt.id === effectiveTier)?.label;
+
+      const replyMsg: ChatMessage = {
+        id: `a-${Date.now()}`,
+        role: 'assistant',
+        text: data.reply,
+        modelLabel: activeTierLabel,
+        sources: Array.isArray(data.sources) ? (data.sources as ChatSource[]) : [],
+      };
+      setMessages((prev) => [...prev, replyMsg]);
+      if (autoSpeak) voice.speak(data.reply);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to reach AI Mentor.');
+      setLastFailedQuery(query);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="STEM Saathi AI Chatbot"
+      className="animate-fade-in fixed inset-0 z-50 flex justify-end bg-[#17324D]/50"
+    >
+      <div className="animate-panel-reveal w-full max-w-lg h-full bg-white dark:bg-[#152A40] border-l border-[#E6DEC8] dark:border-[#284766] flex flex-col">
+        {/* Header */}
+        <div className="px-5 py-3.5 border-b border-[#E6DEC8] dark:border-[#284766] flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <Sparkles className="w-4 h-4 text-[#0F766E] dark:text-[#4AD1C6]" aria-hidden="true" />
+            <div>
+              <h2 className="text-base font-semibold text-[#17324D] dark:text-white">
+                AI {subject} Mentor
+              </h2>
+              <p className="text-[11px] text-[#3D4A50] dark:text-[#B4C5D4]">
+                {isOnline
+                  ? 'AI chat with voice · answers can be spoken and captioned'
+                  : `${t.offlineStatus} · ${t.requiresInternetNotice}`}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-1.5">
+            {messages.length > 0 && (
+              <button
+                type="button"
+                onClick={() => {
+                  setMessages([]);
+                  setError(null);
+                  setLastFailedQuery(null);
+                }}
+                title="Start new conversation"
+                className="inline-flex items-center gap-1 rounded-lg border border-[#E6DEC8] dark:border-[#284766] px-2 py-1 text-[11px] text-[#17324D] dark:text-[#DCE5EC] hover:bg-[#F6F1E3] dark:hover:bg-[#1C3652] cursor-pointer"
+              >
+                <RotateCcw className="w-3 h-3" />
+                <span>New Chat</span>
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Close AI Mentor"
+              className="rounded-lg p-1.5 text-[#3D4A50] hover:text-[#17324D] dark:hover:text-white cursor-pointer"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+        </div>
+
+        {/* Subject, Role, Level & Model Selectors */}
+        <div className="px-5 py-3 border-b border-[#E6DEC8] dark:border-[#284766] space-y-2.5 bg-[#F6F1E3] dark:bg-[#1C3652]/70">
+          <div className="grid grid-cols-2 gap-2.5">
+            <label className="text-xs space-y-1">
+              <span className="text-[#3D4A50] dark:text-[#B4C5D4]">Subject</span>
+              <select
+                value={subject}
+                onChange={(e) => setSubject(e.target.value)}
+                className="w-full rounded-lg border border-[#E6DEC8] dark:border-[#284766] bg-white dark:bg-[#152A40] px-2.5 py-1.5 text-xs text-[#17324D] dark:text-white"
+              >
+                <option value="Physics">Physics (Primary)</option>
+                <option value="Chemistry">Chemistry</option>
+                <option value="Biology">Biology</option>
+                <option value="Mathematics">Mathematics</option>
+              </select>
+            </label>
+            <label className="text-xs space-y-1">
+              <span className="text-[#3D4A50] dark:text-[#B4C5D4]">Chatbot Role</span>
+              <select
+                value={mentorRole}
+                onChange={(e) => setMentorRole(e.target.value)}
+                className="w-full rounded-lg border border-[#E6DEC8] dark:border-[#284766] bg-white dark:bg-[#152A40] px-2.5 py-1.5 text-xs text-[#17324D] dark:text-white"
+              >
+                {MENTOR_ROLES.map((r) => (
+                  <option key={r} value={r}>
+                    {r}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2.5">
+            <label className="text-xs space-y-1">
+              <span className="text-[#3D4A50] dark:text-[#B4C5D4]">Gemini Mode</span>
+              <select
+                value={tier}
+                onChange={(e) => {
+                  const next = e.target.value as MentorTier;
+                  setTier(next);
+                  setUseSearch(next === 'search');
+                }}
+                className="w-full rounded-lg border border-[#E6DEC8] dark:border-[#284766] bg-white dark:bg-[#152A40] px-2.5 py-1.5 text-xs text-[#17324D] dark:text-white"
+              >
+                {TIER_OPTIONS.map((opt) => (
+                  <option key={opt.id} value={opt.id}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="text-xs space-y-1">
+              <span className="text-[#3D4A50] dark:text-[#B4C5D4]">Grade Level</span>
+              <select
+                value={level}
+                onChange={(e) => setLevel(e.target.value)}
+                className="w-full rounded-lg border border-[#E6DEC8] dark:border-[#284766] bg-white dark:bg-[#152A40] px-2.5 py-1.5 text-xs text-[#17324D] dark:text-white"
+              >
+                <option>Middle School (Grades 6-8)</option>
+                <option>Secondary (Grades 9-12)</option>
+                <option>Undergraduate Foundation</option>
+              </select>
+            </label>
+          </div>
+        </div>
+
+        {/* Scrollable Multi-Turn Conversation Feed */}
+        <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
+          {!isOnline && (
+            <div className="rounded-xl border border-[#F2B544] bg-[#FFF4DC] dark:bg-[#F2B544]/15 p-3 text-xs text-[#17324D] dark:text-[#F6F1E3]">
+              {t.offlineStatus}: {t.requiresInternetNotice}. Offline projectile hints, formula sheets, and local quizzes remain available inside Physics World.
+            </div>
+          )}
+
+          {messages.length === 0 && (
+            <div className="space-y-3">
+              <p className="text-xs text-[#3D4A50] dark:text-[#DCE5EC]">
+                Ask any concept, numerical problem, or current science question in English, Hindi, or Kannada.
+              </p>
+              <div className="space-y-2">
+                {STARTER_PROMPTS.map((item) => (
+                  <button
+                    key={item.text}
+                    type="button"
+                    onClick={() => {
+                      if (item.search) setUseSearch(true);
+                      void sendMessage(item.text, item.search);
+                    }}
+                    className="w-full text-left rounded-xl border border-[#E6DEC8] dark:border-[#284766] bg-[#F6F1E3] dark:bg-[#1C3652] px-3.5 py-2.5 text-xs text-[#17324D] dark:text-[#F6F1E3] hover:border-[#0F766E] transition-colors cursor-pointer flex items-start justify-between gap-2"
+                  >
+                    <span>{item.text}</span>
+                    {item.search && (
+                      <Globe className="w-3.5 h-3.5 text-[#0F766E] dark:text-[#4AD1C6] shrink-0 mt-0.5" aria-label="Uses Google Search" />
+                    )}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {messages.map((msg) => (
+            <div
+              key={msg.id}
+              className={`rounded-xl p-3.5 text-xs leading-relaxed ${
+                msg.role === 'user'
+                  ? 'ml-8 bg-[#0F766E] text-white whitespace-pre-wrap'
+                  : 'mr-4 border border-[#E6DEC8] dark:border-[#284766] bg-[#F6F1E3] dark:bg-[#1C3652] text-[#1A262C] dark:text-[#F6F1E3]'
+              }`}
+            >
+              {msg.modelLabel && (
+                <p className="text-[10px] font-medium text-[#0B5F58] dark:text-[#4AD1C6] mb-1.5">
+                  {msg.modelLabel}
+                </p>
+              )}
+              {msg.role === 'user' ? (
+                <p>{msg.text}</p>
+              ) : (
+                <FormattedMessage text={msg.text} />
+              )}
+
+              {/* Google Search Grounding Sources */}
+              {msg.sources && msg.sources.length > 0 && (
+                <div className="mt-2.5 pt-2.5 border-t border-[#E6DEC8] dark:border-[#284766] space-y-1.5">
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-[#3D4A50] dark:text-[#B4C5D4] flex items-center gap-1">
+                    <Globe className="w-3 h-3 text-[#0F766E] dark:text-[#4AD1C6]" />
+                    <span>Google Search Sources</span>
+                  </p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {msg.sources.map((src) => (
+                      <a
+                        key={src.uri}
+                        href={src.uri}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 rounded-md border border-[#E6DEC8] dark:border-[#284766] bg-white dark:bg-[#152A40] px-2 py-1 text-[11px] text-[#0B5F58] dark:text-[#4AD1C6] hover:border-[#0F766E]"
+                      >
+                        <span className="max-w-[180px] truncate">{src.title}</span>
+                        <ExternalLink className="w-3 h-3 shrink-0" />
+                      </a>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {msg.role === 'assistant' && (
+                <button
+                  type="button"
+                  onClick={() => (isSpeaking ? stopSpeaking() : speak(msg.text))}
+                  className="mt-2 inline-flex items-center gap-1 text-[11px] font-medium text-[#0B5F58] dark:text-[#4AD1C6] hover:underline cursor-pointer"
+                >
+                  <Volume2 className="w-3.5 h-3.5" />
+                  <span>{isSpeaking ? t.stopReading : t.readAloud}</span>
+                </button>
+              )}
+            </div>
+          ))}
+
+          {loading && (
+            <div className="mr-8 rounded-xl border border-[#E6DEC8] dark:border-[#284766] bg-[#F6F1E3] dark:bg-[#1C3652] p-3.5 text-xs text-[#3D4A50] dark:text-[#B4C5D4]">
+              {useSearch || tier === 'search'
+                ? 'Searching live web sources and preparing explanation...'
+                : 'Thinking through the concept...'}
+            </div>
+          )}
+
+          {error && (
+            <div className="rounded-xl border border-red-500/40 bg-red-500/10 p-3 text-xs text-red-700 dark:text-red-300 space-y-2">
+              <p>{error}</p>
+              {lastFailedQuery && (
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void sendMessage(lastFailedQuery)}
+                    className="rounded-md border border-red-400/50 px-2.5 py-1 text-[11px] font-semibold hover:bg-red-500/20 cursor-pointer"
+                  >
+                    Retry
+                  </button>
+                  {tier !== 'fast' && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setTier('fast');
+                        setUseSearch(false);
+                        void sendMessage(lastFailedQuery, false, 'fast');
+                      }}
+                      className="rounded-md bg-[#0F766E] px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-[#0B5F58] cursor-pointer"
+                    >
+                      Try Fast Mode (Flash Lite)
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+          <div ref={feedEndRef} />
+        </div>
+
+        {/* Input Bar with Search Toggle + Audio Recording */}
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            void sendMessage();
+          }}
+          className="p-4 border-t border-[#E6DEC8] dark:border-[#284766] space-y-2"
+        >
+          {voice.speaking && (
+            <div role="status" aria-live="polite" className="rounded-xl border border-[#0F766E]/50 bg-[#E3F5F3] dark:bg-[#0F766E]/20 p-3 space-y-1.5">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[10px] font-bold uppercase tracking-wide text-[#0B5F58] dark:text-[#4AD1C6]">
+                  {language === 'hi' ? 'बोल रहा है — कैप्शन' : language === 'kn' ? 'ಮಾತನಾಡುತ್ತಿದೆ — ಕ್ಯಾಪ್ಷನ್' : 'Speaking — captions'}
+                </span>
+                <button type="button" onClick={voice.stop} className="min-h-[36px] rounded-lg border border-[#0F766E] px-3 text-[11px] font-semibold text-[#0B5F58] dark:text-[#4AD1C6] cursor-pointer">
+                  {language === 'hi' ? 'रोकें' : language === 'kn' ? 'ನಿಲ್ಲಿಸಿ' : 'Stop'}
+                </button>
+              </div>
+              <p className="text-base font-medium leading-snug text-[#17324D] dark:text-white">{voice.caption}</p>
+            </div>
+          )}
+          {voice.ttsSupported && !voice.hasVoice && (
+            <p className="text-[11px] text-amber-700 dark:text-amber-400">
+              {language === 'hi'
+                ? 'इस फ़ोन में हिन्दी आवाज़ नहीं मिली — उत्तर कैप्शन में दिखेंगे। फ़ोन की सेटिंग में हिन्दी वॉइस डाउनलोड करें।'
+                : language === 'kn'
+                  ? 'ಈ ಫೋನ್‌ನಲ್ಲಿ ಕನ್ನಡ ಧ್ವನಿ ಸಿಗಲಿಲ್ಲ — ಉತ್ತರ ಕ್ಯಾಪ್ಷನ್‌ನಲ್ಲಿ ತೋರುತ್ತದೆ. ಫೋನ್ ಸೆಟ್ಟಿಂಗ್‌ನಲ್ಲಿ ಕನ್ನಡ ಧ್ವನಿ ಡೌನ್‌ಲೋಡ್ ಮಾಡಿ.'
+                  : 'No English-India voice found on this device — answers will still show as captions.'}
+            </p>
+          )}
+          {voice.voiceError && <p className="text-[11px] text-amber-700 dark:text-amber-400">{voice.voiceError}</p>}
+
+          {voice.ttsSupported && (
+            <div className="rounded-lg border border-[#E6DEC8] dark:border-[#284766] p-2.5 space-y-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-[11px] font-medium text-[#3D4A50] dark:text-[#B4C5D4]">
+                  {language === 'hi' ? 'बोलने की आवाज़' : language === 'kn' ? 'ಮಾತಿನ ಧ್ವನಿ' : 'Spoken voice'}
+                </span>
+                <button
+                  type="button"
+                  aria-pressed={voice.voiceMode === 'natural'}
+                  onClick={() => { voice.stop(); voice.setVoiceMode('natural'); }}
+                  className={`min-h-[36px] rounded-lg border px-2.5 text-[11px] font-semibold cursor-pointer ${voice.voiceMode === 'natural' ? 'border-[#0F766E] bg-[#E3F5F3] text-[#0B5F58] dark:bg-[#0F766E]/20 dark:text-[#4AD1C6]' : 'border-[#D8D0BB] dark:border-[#35516B]'}`}
+                >
+                  {language === 'hi' ? 'Gemini प्राकृतिक आवाज़' : language === 'kn' ? 'Gemini ಸಹಜ ಧ್ವನಿ' : 'Gemini natural voice'}
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={voice.voiceMode === 'device'}
+                  onClick={() => { voice.stop(); voice.setVoiceMode('device'); }}
+                  className={`min-h-[36px] rounded-lg border px-2.5 text-[11px] font-semibold cursor-pointer ${voice.voiceMode === 'device' ? 'border-[#0F766E] bg-[#E3F5F3] text-[#0B5F58] dark:bg-[#0F766E]/20 dark:text-[#4AD1C6]' : 'border-[#D8D0BB] dark:border-[#35516B]'}`}
+                >
+                  {language === 'hi' ? 'डिवाइस आवाज़' : language === 'kn' ? 'ಸಾಧನದ ಧ್ವನಿ' : 'Device voice'}
+                </button>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <label className="flex min-w-0 flex-1 items-center gap-2 text-[11px] font-medium text-[#3D4A50] dark:text-[#B4C5D4]">
+                  <span className="shrink-0">{language === 'hi' ? 'आवाज़' : language === 'kn' ? 'ಧ್ವನಿ' : 'Voice'}</span>
+                  <select
+                    aria-label={language === 'hi' ? 'उत्तर की आवाज़ चुनें' : language === 'kn' ? 'ಉತ್ತರದ ಧ್ವನಿಯನ್ನು ಆಯ್ಕೆಮಾಡಿ' : 'Choose answer voice'}
+                    value={voice.voiceMode === 'natural' ? voice.naturalVoiceName : voice.selectedVoiceURI}
+                    onChange={(event) => {
+                      voice.stop();
+                      if (voice.voiceMode === 'natural') voice.setNaturalVoiceName(event.target.value);
+                      else voice.setPreferredVoice(event.target.value);
+                    }}
+                    className="min-h-[36px] min-w-0 flex-1 rounded-lg border border-[#D8D0BB] dark:border-[#35516B] bg-white dark:bg-[#152A40] px-2 py-1 text-[11px] text-[#17324D] dark:text-[#F6F1E3]"
+                  >
+                    {voice.voiceMode === 'natural' ? (
+                      NATURAL_VOICE_OPTIONS.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)
+                    ) : (
+                      <>
+                        <option value="">Best available voice</option>
+                        {voice.availableVoices.map((option) => (
+                          <option key={option.voiceURI} value={option.voiceURI}>
+                            {option.name} · {option.lang}{option.localService ? ' · on device' : ''}
+                          </option>
+                        ))}
+                      </>
+                    )}
+                  </select>
+                </label>
+                <button
+                  type="button"
+                  onClick={() => voice.speak(
+                    language === 'hi'
+                      ? 'नमस्ते! मैं आपका विज्ञान साथी हूँ। आज आप क्या सीखना चाहेंगे?'
+                      : language === 'kn'
+                        ? 'ನಮಸ್ಕಾರ! ನಾನು ನಿಮ್ಮ ವಿಜ್ಞಾನ ಗೆಳೆಯ. ಇಂದು ನೀವು ಏನು ಕಲಿಯಲು ಬಯಸುತ್ತೀರಿ?'
+                        : 'Hello! I’m your science learning companion. What would you like to explore today?'
+                  )}
+                  aria-label={language === 'hi' ? 'आवाज़ का नमूना सुनें' : language === 'kn' ? 'ಧ್ವನಿ ಮಾದರಿಯನ್ನು ಕೇಳಿ' : 'Preview selected voice'}
+                  className="min-h-[36px] shrink-0 rounded-lg border border-[#D8D0BB] dark:border-[#35516B] px-2 text-[11px] text-[#17324D] dark:text-[#F6F1E3] hover:bg-[#F6F1E3] dark:hover:bg-[#1C3652] cursor-pointer"
+                >
+                  {language === 'hi' ? 'सुनें' : language === 'kn' ? 'ಕೇಳಿ' : 'Preview'}
+                </button>
+              </div>
+              {voice.voiceMode === 'natural' && (
+                <p className="text-[10px] leading-relaxed text-[#53636A] dark:text-[#B4C5D4]">
+                  {language === 'hi'
+                    ? 'इसे केवल Gemini मुफ़्त टियर प्रोजेक्ट के साथ चलाएँ; बिलिंग वाले प्रोजेक्ट पर शुल्क लग सकता है। कोटा या नेटवर्क न हो तो डिवाइस आवाज़ चलेगी।'
+                    : language === 'kn'
+                      ? 'Gemini ಉಚಿತ ಟಿಯರ್ ಪ್ರಾಜೆಕ್ಟ್‌ನಲ್ಲೇ ಬಳಸಿ; ಬಿಲ್ಲಿಂಗ್ ಸಕ್ರಿಯ ಪ್ರಾಜೆಕ್ಟ್‌ಗೆ ಶುಲ್ಕವಾಗಬಹುದು. ಕೋಟಾ ಅಥವಾ ನೆಟ್‌ವರ್ಕ್ ಇಲ್ಲದಿದ್ದರೆ ಸಾಧನದ ಧ್ವನಿ ಬಳಸಲಾಗುತ್ತದೆ.'
+                      : 'Use only with a Gemini Free Tier project; billing-enabled projects may incur charges. If quota or network is unavailable, the device voice will be used.'}
+                </p>
+              )}
+            </div>
+          )}
+
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={toggleAutoSpeak}
+              aria-pressed={autoSpeak}
+              className={`min-h-[40px] inline-flex items-center gap-1.5 rounded-lg border px-3 text-[11px] font-semibold cursor-pointer ${
+                autoSpeak
+                  ? 'border-[#0F766E] bg-[#E3F5F3] dark:bg-[#0F766E]/20 text-[#0B5F58] dark:text-[#4AD1C6]'
+                  : 'border-[#E6DEC8] dark:border-[#284766] text-[#3D4A50] dark:text-[#B4C5D4]'
+              }`}
+            >
+              <Volume2 className="w-3.5 h-3.5" aria-hidden="true" />
+              {language === 'hi' ? 'उत्तर बोलकर सुनाएँ' : language === 'kn' ? 'ಉತ್ತರ ಮಾತಿನಲ್ಲಿ' : 'Spoken answers'}: {autoSpeak ? 'ON' : 'OFF'}
+            </button>
+            {experimentContext && (
+              <button
+                type="button"
+                disabled={loading}
+                onClick={() =>
+                  void sendMessage(
+                    language === 'hi'
+                      ? 'मेरे सिमुलेशन में जो मान दिख रहे हैं उनके आधार पर समझाइए कि अभी क्या हो रहा है और क्यों।'
+                      : language === 'kn'
+                        ? 'ನನ್ನ ಸಿಮ್ಯುಲೇಶನ್‌ನಲ್ಲಿ ತೋರುವ ಮೌಲ್ಯಗಳ ಆಧಾರದ ಮೇಲೆ ಈಗ ಏನು ನಡೆಯುತ್ತಿದೆ ಮತ್ತು ಏಕೆ ಎಂದು ವಿವರಿಸಿ.'
+                        : 'Using the exact values shown in my simulation, explain what is happening now and why.'
+                  )
+                }
+                className="min-h-[40px] inline-flex items-center gap-1.5 rounded-lg bg-[#17324D] px-3 text-[11px] font-semibold text-white disabled:opacity-50 cursor-pointer"
+              >
+                {language === 'hi' ? 'मेरा सिमुलेशन समझाएँ' : language === 'kn' ? 'ನನ್ನ ಸಿಮ್ಯುಲೇಶನ್ ವಿವರಿಸಿ' : 'Explain my simulation'}
+              </button>
+            )}
+          </div>
+
+          <div className="flex items-center justify-between gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                const next = !(useSearch || tier === 'search');
+                setUseSearch(next);
+                if (!next && tier === 'search') setTier('fast');
+              }}
+              aria-pressed={useSearch || tier === 'search'}
+              className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-[11px] font-medium transition-colors cursor-pointer ${
+                useSearch || tier === 'search'
+                  ? 'border-[#0F766E] bg-[#E3F5F3] dark:bg-[#0F766E]/20 text-[#0B5F58] dark:text-[#4AD1C6]'
+                  : 'border-[#E6DEC8] dark:border-[#284766] text-[#3D4A50] dark:text-[#B4C5D4] hover:border-[#0F766E]'
+              }`}
+            >
+              <Globe className="w-3.5 h-3.5" />
+              <span>
+                {useSearch || tier === 'search'
+                  ? 'Google Search Grounding: ON'
+                  : 'Enable Google Search Grounding'}
+              </span>
+            </button>
+
+            {isTranscribing && (
+              <span className="text-[11px] text-[#0B5F58] dark:text-[#4AD1C6]">Transcribing audio...</span>
+            )}
+          </div>
+
+          {transcribeError && <p className="text-[11px] text-amber-600">{transcribeError}</p>}
+
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              disabled={isTranscribing}
+              onClick={() => {
+                if (voice.sttSupported) {
+                  if (voice.listening) {
+                    voice.stopListening();
+                    return;
+                  }
+                  voice.listen(
+                    (txt) => setInput(txt),
+                    (txt) => {
+                      setInput('');
+                      void sendMessage(txt);
+                    }
+                  );
+                  return;
+                }
+                if (isRecording) stopRecording();
+                else void startRecording((txt) => setInput((prev) => (prev ? `${prev} ${txt}` : txt)));
+              }}
+              aria-label={voice.listening || isRecording ? 'Stop listening' : 'Ask by voice'}
+              title={voice.listening || isRecording ? 'Stop listening' : 'Ask by voice'}
+              className={`min-h-[44px] min-w-[44px] rounded-lg border p-2.5 cursor-pointer ${
+                voice.listening || isRecording
+                  ? 'border-red-500 bg-red-500/15 text-red-500'
+                  : 'border-[#E6DEC8] dark:border-[#284766] text-[#3D4A50] dark:text-[#B4C5D4] hover:bg-[#F6F1E3] dark:hover:bg-[#1C3652]'
+              }`}
+            >
+              {voice.listening || isRecording ? <Square className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
+            </button>
+            <input
+              type="text"
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              placeholder="Ask your Physics or STEM question..."
+              className="flex-1 rounded-lg border border-[#E6DEC8] dark:border-[#284766] bg-[#F6F1E3] dark:bg-[#1C3652] px-3 py-2 text-xs text-[#17324D] dark:text-white focus:outline-none focus:ring-2 focus:ring-[#0F766E]"
+            />
+            <button
+              type="submit"
+              disabled={loading || !input.trim()}
+              aria-label="Send question"
+              className="rounded-lg bg-[#0F766E] p-2.5 text-white hover:bg-[#0B5F58] disabled:opacity-50 cursor-pointer"
+            >
+              <Send className="w-4 h-4" />
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+};

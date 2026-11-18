@@ -1,0 +1,6 @@
+{
+  "name": "STEM Saathi",
+  "description": "Inclusive multilingual 3D STEM education platform with Physics as the primary interactive observatory alongside Chemistry, Biology, and Mathematics.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

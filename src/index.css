@@ -1,0 +1,146 @@
+@import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
+
+@layer base {
+  :focus-visible {
+    outline: 3px solid #B45309;
+    outline-offset: 2px;
+  }
+  html { font-size: 17px; }
+
+  :root {
+    --font-display: 'Outfit', 'Noto Sans Devanagari', 'Noto Sans Kannada', sans-serif;
+    --font-sans: 'Plus Jakarta Sans', 'Noto Sans Devanagari', 'Noto Sans Kannada', sans-serif;
+    --font-mono: 'IBM Plex Mono', monospace;
+  }
+
+  body {
+    font-family: var(--font-sans);
+    line-height: 1.65;
+    background-color: #F6F1E3;
+    color: #1A262C;
+  }
+
+  html.dark body {
+    background-color: #0E1E2E;
+    color: #EEF3F7;
+  }
+
+  h1, h2, h3, h4, .font-display {
+    font-family: var(--font-display);
+  }
+
+  code, pre, .font-mono {
+    font-family: var(--font-mono);
+  }
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+.text-balance {
+  text-wrap: balance;
+}
+
+/* Smooth GPU-composited navigation & panel transitions */
+@keyframes viewEnter {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 8px, 0);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes panelReveal {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 6px, 0) scale(0.992);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+@keyframes drawerSlideIn {
+  from {
+    opacity: 0.7;
+    transform: translate3d(-100%, 0, 0);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes fadeBackdrop {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.animate-view-enter {
+  animation: viewEnter 220ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.animate-panel-reveal {
+  animation: panelReveal 180ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.animate-drawer-in {
+  animation: drawerSlideIn 220ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.animate-fade-in {
+  animation: fadeBackdrop 160ms ease-out both;
+}
+
+/* Accessibility scale, lite motion, and high-contrast modes */
+html.a11y-scale-md {
+  font-size: 17px;
+}
+
+html.a11y-scale-lg {
+  font-size: 19px;
+}
+
+html.a11y-dyslexia body {
+  letter-spacing: 0.025em;
+  word-spacing: 0.08em;
+  line-height: 1.75;
+}
+
+html.a11y-high-contrast body {
+  background-color: #000000 !important;
+  background-image: none !important;
+  color: #ffffff !important;
+}
+
+html.a11y-high-contrast .a11y-surface {
+  background-color: #090d16 !important;
+  border-color: #ffffff !important;
+}
+
+html.a11y-lite-motion *,
+html.a11y-lite-motion *::before,
+html.a11y-lite-motion *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
