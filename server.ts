@@ -126,38 +126,114 @@ async function startServer() {
   app.use('/api/auth', noStore);
   app.use('/api/account', noStore);
 
+  // ---------------- Natural (AI) voice for the tutor ----------------
+  // English: Groq Orpheus (needs GROQ_API_KEY + the model's terms accepted once in the Groq console).
+  // Hindi / Kannada (and English fallback): Gemini TTS (needs GEMINI_API_KEY).
+  // Anything that fails → the app uses the phone's own voice.
+  const GROQ_TTS_MODEL = process.env.GROQ_TTS_MODEL || 'canopylabs/orpheus-v1-english';
+  const GROQ_VOICES = ['hannah', 'diana', 'autumn', 'austin', 'daniel', 'troy'];
+  const GEMINI_VOICES = ['Sulafat', 'Aoede', 'Achird', 'Kore'];
+  const hasGemini = () => Boolean(process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== 'MY_GEMINI_API_KEY');
+  const hasGroq = () => Boolean(process.env.GROQ_API_KEY);
+  // Learned from real calls: null = not tried yet, otherwise whether Groq TTS works and why not.
+  let groqTts: { ok: boolean; reason?: string; checkedAt: number } | null = null;
+
+  async function groqSpeech(text: string, voice: string): Promise<Buffer> {
+    const r = await fetch('https://api.groq.com/openai/v1/audio/speech', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${process.env.GROQ_API_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: GROQ_TTS_MODEL, input: text, voice, response_format: 'wav' }),
+    });
+    if (!r.ok) {
+      const body = await r.text();
+      const err = new Error(body.slice(0, 400)) as Error & { status?: number; terms?: boolean };
+      err.status = r.status;
+      err.terms = /terms/i.test(body);
+      throw err;
+    }
+    return Buffer.from(await r.arrayBuffer());
+  }
+
+  function speechEngineFor(language: string): 'groq' | 'gemini' | null {
+    if (language === 'en' && hasGroq() && groqTts?.ok !== false) return 'groq';
+    if (hasGemini()) return 'gemini';
+    if (language === 'en' && hasGroq() && groqTts && Date.now() - groqTts.checkedAt > 10 * 60_000) return 'groq'; // retry later
+    return null;
+  }
+
+  // One tiny check (cached) so the app knows straight away whether the English AI voice is switched on.
+  let groqProbe: Promise<void> | null = null;
+  const probeGroq = () => {
+    if (!hasGroq() || (groqTts && Date.now() - groqTts.checkedAt < 10 * 60_000)) return Promise.resolve();
+    groqProbe ??= groqSpeech('Hi.', 'hannah')
+      .then(() => void (groqTts = { ok: true, checkedAt: Date.now() }))
+      .catch((e: Error & { status?: number; terms?: boolean }) => {
+        const hard = e.terms || e.status === 401 || e.status === 403 || e.status === 404;
+        groqTts = { ok: !hard, reason: e.terms ? 'terms' : String(e.status), checkedAt: Date.now() };
+      })
+      .finally(() => void (groqProbe = null));
+    return groqProbe;
+  };
+
+  app.get('/api/mentor/speech/status', noStore, async (_req, res) => {
+    await Promise.race([probeGroq(), new Promise((r) => setTimeout(r, 6000))]);
+    const engine = (lang: string) => speechEngineFor(lang);
+    res.json({
+      engines: { en: engine('en'), hi: engine('hi'), kn: engine('kn') },
+      voices: { groq: GROQ_VOICES, gemini: GEMINI_VOICES },
+      groqNeedsTerms: groqTts?.ok === false && groqTts.reason === 'terms',
+    });
+  });
+
   const ttsRequestBuckets = new Map<string, { count: number; resetAt: number }>();
   app.post('/api/mentor/speech', noStore, async (req, res) => {
     const now = Date.now();
     const ip = req.ip || 'unknown';
     const bucket = ttsRequestBuckets.get(ip);
-    if (bucket && bucket.resetAt > now && bucket.count >= 20) {
-      res.status(429).json({ error: 'Natural voice is temporarily rate-limited. Please wait a minute or use the device voice.' });
+    // the app sends one sentence per request, so allow a generous number per minute
+    if (bucket && bucket.resetAt > now && bucket.count >= 90) {
+      res.status(429).json({ error: 'Natural voice is busy. Using the device voice for now.' });
       return;
     }
     if (!bucket || bucket.resetAt <= now) ttsRequestBuckets.set(ip, { count: 1, resetAt: now + 60_000 });
     else bucket.count += 1;
 
+    const { text, language = 'en', voiceName } = req.body ?? {};
+    if (typeof text !== 'string' || !text.trim()) {
+      res.status(400).json({ error: 'Text is required for speech.' });
+      return;
+    }
+    const engine = speechEngineFor(language);
+    if (!engine) {
+      res.status(503).json({
+        error:
+          language === 'en'
+            ? 'Natural voice is not set up on the server.'
+            : 'Natural voice for Hindi and Kannada needs a Gemini key on the server.',
+      });
+      return;
+    }
+
     try {
-      const { text, language = 'en', voiceName = 'Sulafat' } = req.body ?? {};
-      if (typeof text !== 'string' || !text.trim()) {
-        res.status(400).json({ error: 'Text is required for speech.' });
-        return;
-      }
-      if (text.length > 5000) {
-        res.status(413).json({ error: 'This answer is too long for natural voice. Use the device voice or shorten the text.' });
-        return;
-      }
-      const languageCode = language === 'hi' ? 'hi-IN' : language === 'kn' ? 'kn-IN' : 'en-IN';
-      const allowedVoices = new Set(['Sulafat', 'Aoede', 'Achird', 'Kore']);
-      const selectedVoice = allowedVoices.has(voiceName) ? voiceName : 'Sulafat';
-      const apiKey = process.env.GEMINI_API_KEY;
-      if (!apiKey || apiKey === 'MY_GEMINI_API_KEY') {
-        res.status(503).json({ error: 'Natural voice needs GEMINI_API_KEY. You can still use the device voice.' });
+      if (engine === 'groq') {
+        if (text.length > 200) {
+          res.status(413).json({ error: 'Send at most 200 characters per request.' });
+          return;
+        }
+        const voice = GROQ_VOICES.includes(String(voiceName)) ? String(voiceName) : 'hannah';
+        const wav = await groqSpeech(text.trim(), voice);
+        groqTts = { ok: true, checkedAt: Date.now() };
+        res.json({ audioBase64: wav.toString('base64'), mimeType: 'audio/wav', engine });
         return;
       }
 
-      const ai = new GoogleGenAI({ apiKey, httpOptions: { apiVersion: 'v1beta' } });
+      if (text.length > 5000) {
+        res.status(413).json({ error: 'This answer is too long for natural voice.' });
+        return;
+      }
+      const languageCode = language === 'hi' ? 'hi-IN' : language === 'kn' ? 'kn-IN' : 'en-IN';
+      const selectedVoice = GEMINI_VOICES.includes(String(voiceName)) ? String(voiceName) : 'Sulafat';
+      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY!, httpOptions: { apiVersion: 'v1beta' } });
       const response = await ai.models.generateContent({
         model: 'gemini-3.8-flash-lite-tts',
         contents: [{
@@ -173,22 +249,28 @@ async function startServer() {
           responseModalities: ['AUDIO'],
           speechConfig: { languageCode, voiceConfig: { voice: selectedVoice } },
         },
-      });
+      } as any);
       const audioPart = response.candidates?.[0]?.content?.parts?.find((part) => part.inlineData?.data);
       const audioBase64 = audioPart?.inlineData?.data;
       if (!audioBase64) {
-        res.status(502).json({ error: 'Natural voice returned no audio. Please use the device voice.' });
+        res.status(502).json({ error: 'Natural voice returned no audio.' });
         return;
       }
-      res.json({ audioBase64, mimeType: audioPart?.inlineData?.mimeType || 'audio/wav' });
+      res.json({ audioBase64, mimeType: audioPart?.inlineData?.mimeType || 'audio/wav', engine });
     } catch (error) {
-      const raw = error instanceof Error ? error.message : String(error);
-      const status = /429|RESOURCE_EXHAUSTED|quota/i.test(raw) ? 429 : 502;
-      console.error('AI Mentor speech error:', status, raw.slice(0, 500));
+      const e = error as Error & { status?: number; terms?: boolean };
+      const raw = e.message || String(error);
+      if (engine === 'groq') {
+        groqTts = { ok: !(e.terms || e.status === 401 || e.status === 403 || e.status === 404), reason: e.terms ? 'terms' : String(e.status), checkedAt: Date.now() };
+      }
+      const status = e.status === 429 || /429|RESOURCE_EXHAUSTED|quota|rate limit/i.test(raw) ? 429 : 502;
+      console.error('AI Mentor speech error:', engine, status, raw.slice(0, 300));
       res.status(status).json({
-        error: status === 429
-          ? 'Gemini natural-voice free quota is temporarily unavailable. Use the device voice or try again after the quota resets.'
-          : 'Natural voice could not be generated. Check the connection and try the device voice.',
+        error: e.terms
+          ? 'The natural English voice must be switched on once in the Groq console (accept the Orpheus terms).'
+          : status === 429
+            ? 'Natural voice limit reached for now.'
+            : 'Natural voice could not be generated.',
       });
     }
   });

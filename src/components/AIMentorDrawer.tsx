@@ -13,7 +13,7 @@ import {
 import { UI_TEXT } from '../data/i18n';
 import { useAudioTranscriber } from '../hooks/useAudioTranscriber';
 import { useOnlineStatus } from '../hooks/useOnlineStatus';
-import { NATURAL_VOICE_OPTIONS, useTeacherVoice } from '../hooks/useTeacherVoice';
+import { useTeacherVoice } from '../hooks/useTeacherVoice';
 import type { ChatSource, Language, MentorTier } from '../types/stem';
 
 interface AIMentorDrawerProps {
@@ -555,7 +555,7 @@ export const AIMentorDrawer: React.FC<AIMentorDrawerProps> = ({
                   onClick={() => { voice.stop(); voice.setVoiceMode('natural'); }}
                   className={`min-h-[36px] rounded-lg border px-2.5 text-[11px] font-semibold cursor-pointer ${voice.voiceMode === 'natural' ? 'border-[#0F766E] bg-[#E3F5F3] text-[#0B5F58] dark:bg-[#0F766E]/20 dark:text-[#4AD1C6]' : 'border-[#D8D0BB] dark:border-[#35516B]'}`}
                 >
-                  {language === 'hi' ? 'Gemini प्राकृतिक आवाज़' : language === 'kn' ? 'Gemini ಸಹಜ ಧ್ವನಿ' : 'Gemini natural voice'}
+                  {language === 'hi' ? 'प्राकृतिक आवाज़' : language === 'kn' ? 'ಸಹಜ ಧ್ವನಿ' : 'Natural voice'}
                 </button>
                 <button
                   type="button"
@@ -580,7 +580,9 @@ export const AIMentorDrawer: React.FC<AIMentorDrawerProps> = ({
                     className="min-h-[36px] min-w-0 flex-1 rounded-lg border border-[#D8D0BB] dark:border-[#35516B] bg-white dark:bg-[#152A40] px-2 py-1 text-[11px] text-[#17324D] dark:text-[#F6F1E3]"
                   >
                     {voice.voiceMode === 'natural' ? (
-                      NATURAL_VOICE_OPTIONS.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)
+                      voice.naturalVoices.length > 0
+                        ? voice.naturalVoices.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)
+                        : <option value="">{language === 'hi' ? 'फ़ोन की आवाज़ (प्राकृतिक उपलब्ध नहीं)' : language === 'kn' ? 'ಫೋನ್ ಧ್ವನಿ (ಸಹಜ ಲಭ್ಯವಿಲ್ಲ)' : 'Phone voice (natural not available)'}</option>
                     ) : (
                       <>
                         <option value="">Best available voice</option>
@@ -610,11 +612,13 @@ export const AIMentorDrawer: React.FC<AIMentorDrawerProps> = ({
               </div>
               {voice.voiceMode === 'natural' && (
                 <p className="text-[10px] leading-relaxed text-[#53636A] dark:text-[#B4C5D4]">
-                  {language === 'hi'
-                    ? 'इसे केवल Gemini मुफ़्त टियर प्रोजेक्ट के साथ चलाएँ; बिलिंग वाले प्रोजेक्ट पर शुल्क लग सकता है। कोटा या नेटवर्क न हो तो डिवाइस आवाज़ चलेगी।'
-                    : language === 'kn'
-                      ? 'Gemini ಉಚಿತ ಟಿಯರ್ ಪ್ರಾಜೆಕ್ಟ್‌ನಲ್ಲೇ ಬಳಸಿ; ಬಿಲ್ಲಿಂಗ್ ಸಕ್ರಿಯ ಪ್ರಾಜೆಕ್ಟ್‌ಗೆ ಶುಲ್ಕವಾಗಬಹುದು. ಕೋಟಾ ಅಥವಾ ನೆಟ್‌ವರ್ಕ್ ಇಲ್ಲದಿದ್ದರೆ ಸಾಧನದ ಧ್ವನಿ ಬಳಸಲಾಗುತ್ತದೆ.'
-                      : 'Use only with a Gemini Free Tier project; billing-enabled projects may incur charges. If quota or network is unavailable, the device voice will be used.'}
+                  {voice.naturalNeedsSetup
+                    ? 'The natural English voice is not switched on yet: the Groq account owner must accept the Orpheus model terms once in the Groq console. Using the phone voice until then.'
+                    : voice.naturalEngine === 'groq'
+                      ? 'AI voice (Groq Orpheus), spoken sentence by sentence. Needs internet; the phone voice is used when offline.'
+                      : voice.naturalEngine === 'gemini'
+                        ? (language === 'hi' ? 'AI आवाज़ (Gemini)। इंटरनेट चाहिए; ऑफ़लाइन होने पर फ़ोन की आवाज़ चलेगी।' : language === 'kn' ? 'AI ಧ್ವನಿ (Gemini). ಇಂಟರ್ನೆಟ್ ಬೇಕು; ಆಫ್‌ಲೈನ್‌ನಲ್ಲಿ ಫೋನ್ ಧ್ವನಿ.' : 'AI voice (Gemini). Needs internet; the phone voice is used when offline.')
+                        : (language === 'hi' ? 'इस भाषा के लिए AI आवाज़ सेट नहीं है, इसलिए फ़ोन की सबसे अच्छी आवाज़ उपयोग होगी।' : language === 'kn' ? 'ಈ ಭಾಷೆಗೆ AI ಧ್ವನಿ ಸಿದ್ಧವಿಲ್ಲ, ಆದ್ದರಿಂದ ಫೋನ್‌ನ ಉತ್ತಮ ಧ್ವನಿ ಬಳಸಲಾಗುತ್ತದೆ.' : 'AI voice is not set up for this language, so the best phone voice is used.')}
                 </p>
               )}
             </div>

@@ -19,7 +19,14 @@ export function getSpeechVoiceChoices(
   voices: SpeechSynthesisVoice[] = typeof window === 'undefined' ? [] : window.speechSynthesis.getVoices()
 ): SpeechSynthesisVoice[] {
   const primaryLanguage = language.toLowerCase();
+  // Some systems (e.g. macOS "Rishi") report the same voice twice; keep one of each.
+  const seen = new Set<string>();
   return voices
+    .filter((voice) => {
+      if (seen.has(voice.voiceURI)) return false;
+      seen.add(voice.voiceURI);
+      return true;
+    })
     .filter((voice) => voice.lang.toLowerCase().startsWith(primaryLanguage))
     .sort((a, b) => {
       const target = SPEECH_LANG_CODES[language].toLowerCase();

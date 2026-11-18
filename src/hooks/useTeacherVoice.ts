@@ -17,14 +17,20 @@ interface RecInstance {
 type RecCtor = new () => RecInstance;
 type VoiceMode = 'device' | 'natural';
 
-const SPEECH_MODE_KEY = 'stem-saathi-ai-voice-mode-v2';
-const NATURAL_VOICE_KEY = 'stem-saathi-natural-voice-v1';
-export const NATURAL_VOICE_OPTIONS = [
-  { id: 'Sulafat', label: 'Sulafat · warm' },
-  { id: 'Aoede', label: 'Aoede · breezy' },
-  { id: 'Achird', label: 'Achird · friendly' },
-  { id: 'Kore', label: 'Kore · clear' },
-] as const;
+// v3: natural voice is now the default for everyone
+const SPEECH_MODE_KEY = 'stem-saathi-ai-voice-mode-v3';
+const NATURAL_VOICE_KEY = 'stem-saathi-natural-voice-v2';
+type Engine = 'groq' | 'gemini';
+const VOICE_LABELS: Record<Engine, Record<string, string>> = {
+  groq: { hannah: 'Hannah · warm', diana: 'Diana · clear', autumn: 'Autumn · gentle', austin: 'Austin · friendly', daniel: 'Daniel · calm', troy: 'Troy · bright' },
+  gemini: { Sulafat: 'Sulafat · warm', Aoede: 'Aoede · breezy', Achird: 'Achird · friendly', Kore: 'Kore · clear' },
+};
+const DEFAULT_VOICE: Record<Engine, string> = { groq: 'hannah', gemini: 'Sulafat' };
+interface SpeechStatus {
+  engines: Partial<Record<Language, Engine | null>>;
+  voices: Record<Engine, string[]>;
+  groqNeedsTerms?: boolean;
+}
 
 function getStoredValue(key: string, fallback: string): string {
   try { return localStorage.getItem(key) || fallback; } catch { return fallback; }
@@ -76,9 +82,9 @@ export function splitForSpeech(text: string, max = 180): string[] {
 }
 
 /**
- * Spoken answers with live captions, plus hands-free voice input. Students can
- * choose the on-device speech engine or Gemini TTS; Gemini quota/network failures
- * fall back to the browser voice.
+ * Spoken answers with live captions, plus hands-free voice input. Natural AI voice is the default
+ * (Groq Orpheus for English, Gemini for Hindi/Kannada when configured); any failure falls back to
+ * the phone's own voice.
  */
 export function useTeacherVoice(language: Language) {
   const [speaking, setSpeaking] = useState(false);
@@ -90,9 +96,32 @@ export function useTeacherVoice(language: Language) {
   const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([]);
   const [voiceSelections, setVoiceSelections] = useState<Partial<Record<Language, string>>>({});
   const [voiceMode, setVoiceModeState] = useState<VoiceMode>(() =>
-    getStoredValue(SPEECH_MODE_KEY, 'device') === 'natural' ? 'natural' : 'device'
+    getStoredValue(SPEECH_MODE_KEY, 'natural') === 'device' ? 'device' : 'natural'
   );
-  const [naturalVoiceName, setNaturalVoiceNameState] = useState(() => getStoredValue(NATURAL_VOICE_KEY, 'Sulafat'));
+  const [naturalVoiceName, setNaturalVoiceNameState] = useState(() => getStoredValue(NATURAL_VOICE_KEY, ''));
+  const [speechStatus, setSpeechStatus] = useState<SpeechStatus | null>(null);
+  const naturalOkRef = useRef(true); // turned off for this page after a hard failure (e.g. terms not accepted)
+
+  // Which natural voice engine (if any) the server offers for each language
+  useEffect(() => {
+    let alive = true;
+    fetch('/api/mentor/speech/status')
+      .then((r) => (r.ok ? (r.json() as Promise<SpeechStatus>) : null))
+      .then((st) => alive && st && setSpeechStatus(st))
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, []);
+  const engine: Engine | null = speechStatus?.engines[language] ?? null;
+  const naturalVoices = engine
+    ? (speechStatus?.voices[engine] ?? []).map((id) => ({ id, label: VOICE_LABELS[engine][id] ?? id }))
+    : [];
+  const naturalVoice = engine
+    ? naturalVoices.some((v) => v.id === naturalVoiceName)
+      ? naturalVoiceName
+      : DEFAULT_VOICE[engine]
+    : '';
   const token = useRef(0);
   const recRef = useRef<RecInstance | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -137,9 +166,8 @@ export function useTeacherVoice(language: Language) {
   }, []);
 
   const setNaturalVoiceName = useCallback((name: string) => {
-    const safeName = NATURAL_VOICE_OPTIONS.some((voice) => voice.id === name) ? name : 'Sulafat';
-    setNaturalVoiceNameState(safeName);
-    try { localStorage.setItem(NATURAL_VOICE_KEY, safeName); } catch { /* Keep the current-page preference. */ }
+    setNaturalVoiceNameState(name);
+    try { localStorage.setItem(NATURAL_VOICE_KEY, name); } catch { /* Keep the current-page preference. */ }
   }, []);
 
   const releaseAiAudio = useCallback(() => {
@@ -202,59 +230,97 @@ export function useTeacherVoice(language: Language) {
         };
         window.speechSynthesis.speak(u);
       };
-      if (voiceMode === 'device') {
+      if (voiceMode === 'device' || !engine || !naturalOkRef.current) {
+        if (voiceMode === 'natural' && !engine && speechStatus && language !== 'en') {
+          setVoiceError(
+            language === 'hi'
+              ? 'हिंदी के लिए प्राकृतिक आवाज़ उपलब्ध नहीं है — फ़ोन की आवाज़ उपयोग हो रही है।'
+              : 'ಕನ್ನಡಕ್ಕೆ ಸಹಜ ಧ್ವನಿ ಲಭ್ಯವಿಲ್ಲ — ಫೋನ್ ಧ್ವನಿ ಬಳಸಲಾಗುತ್ತಿದೆ.'
+          );
+        }
         playFrom(0);
         return;
       }
 
-      void (async () => {
-        try {
-          const response = await fetch('/api/mentor/speech', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ text: cleanForSpeech(text), language, voiceName: naturalVoiceName }),
-          });
-          const data = await response.json().catch(() => ({})) as { audioBase64?: string; mimeType?: string; error?: string };
-          if (!response.ok || !data.audioBase64) throw new Error(data.error || 'Natural voice is unavailable.');
-          if (token.current !== my) return;
-
+      // Natural voice: one sentence per request (the English model takes ≤200 characters),
+      // fetching the next sentence while the current one plays so speech flows without gaps.
+      const fetchPart = (i: number): Promise<string> =>
+        fetch('/api/mentor/speech', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: parts[i], language, voiceName: naturalVoice }),
+        }).then(async (response) => {
+          const data = (await response.json().catch(() => ({}))) as { audioBase64?: string; mimeType?: string; error?: string };
+          if (!response.ok || !data.audioBase64) {
+            const err = new Error(data.error || 'Natural voice is unavailable.') as Error & { hard?: boolean };
+            err.hard = response.status === 502 || response.status === 503 || /console|set up|needs/i.test(data.error ?? '');
+            throw err;
+          }
           const binary = atob(data.audioBase64);
           const bytes = new Uint8Array(binary.length);
-          for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-          const blob = new Blob([bytes.buffer as ArrayBuffer], { type: data.mimeType || 'audio/wav' });
-          const url = URL.createObjectURL(blob);
-          const audio = new Audio(url);
-          audioRef.current = audio;
-          audioUrlRef.current = url;
-          setActive(0);
-          audio.ontimeupdate = () => {
-            if (!audio.duration || !Number.isFinite(audio.duration) || token.current !== my) return;
-            const index = Math.min(parts.length - 1, Math.floor((audio.currentTime / audio.duration) * parts.length));
-            setActive(index);
-          };
-          const finish = () => {
-            if (token.current !== my) return;
-            releaseAiAudio();
-            setSpeaking(false);
-            setActive(-1);
-          };
-          audio.onended = finish;
-          audio.onerror = () => {
-            if (token.current !== my) return;
-            releaseAiAudio();
-            setVoiceError('Natural voice playback failed. Using the device voice instead.');
-            playFrom(0);
-          };
-          await audio.play();
+          for (let k = 0; k < binary.length; k++) bytes[k] = binary.charCodeAt(k);
+          return URL.createObjectURL(new Blob([bytes.buffer as ArrayBuffer], { type: data.mimeType || 'audio/wav' }));
+        });
+      const pending = new Map<number, Promise<string>>();
+      const get = (i: number) => {
+        if (!pending.has(i)) {
+          const pr = fetchPart(i);
+          pr.catch(() => undefined); // handled when played
+          pending.set(i, pr);
+        }
+        return pending.get(i)!;
+      };
+      const cleanupPending = () => {
+        pending.forEach((pr) => pr.then((u) => URL.revokeObjectURL(u)).catch(() => undefined));
+        pending.clear();
+      };
+      const playNatural = async (i: number) => {
+        if (token.current !== my) return cleanupPending();
+        if (i >= parts.length) {
+          releaseAiAudio();
+          setSpeaking(false);
+          setActive(-1);
+          return;
+        }
+        let url: string;
+        try {
+          url = await get(i);
+          if (i + 1 < parts.length) get(i + 1);
         } catch (error) {
           if (token.current !== my) return;
-          releaseAiAudio();
-          setVoiceError(`${error instanceof Error ? error.message : 'Natural voice is unavailable.'} Using the device voice instead.`);
-          playFrom(0);
+          if ((error as { hard?: boolean }).hard) naturalOkRef.current = false;
+          setVoiceError(`${error instanceof Error ? error.message : 'Natural voice is unavailable.'} Using the device voice.`);
+          cleanupPending();
+          playFrom(i);
+          return;
         }
-      })();
+        if (token.current !== my) return URL.revokeObjectURL(url);
+        releaseAiAudio();
+        pending.delete(i);
+        const audio = new Audio(url);
+        audioRef.current = audio;
+        audioUrlRef.current = url;
+        setActive(i);
+        audio.onended = () => void playNatural(i + 1);
+        audio.onerror = () => {
+          if (token.current !== my) return;
+          setVoiceError('Natural voice playback failed. Using the device voice.');
+          cleanupPending();
+          playFrom(i);
+        };
+        try {
+          await audio.play();
+        } catch {
+          if (token.current !== my) return;
+          cleanupPending();
+          playFrom(i);
+        }
+      };
+      get(0);
+      if (parts.length > 1) get(1);
+      void playNatural(0);
     },
-    [language, naturalVoiceName, pickVoice, releaseAiAudio, ttsSupported, voiceMode]
+    [engine, language, naturalVoice, pickVoice, releaseAiAudio, speechStatus, ttsSupported, voiceMode]
   );
 
   const stopListening = useCallback(() => {
@@ -334,8 +400,11 @@ export function useTeacherVoice(language: Language) {
     availableVoices,
     voiceMode,
     setVoiceMode,
-    naturalVoiceName,
+    naturalVoiceName: naturalVoice,
     setNaturalVoiceName,
+    naturalVoices,
+    naturalEngine: engine,
+    naturalNeedsSetup: Boolean(speechStatus?.groqNeedsTerms),
     selectedVoiceURI: availableVoices.some(
       (voice) => voice.voiceURI === (voiceSelections[language] ?? getSavedSpeechVoiceURI(language))
     )
