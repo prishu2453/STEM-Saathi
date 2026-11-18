@@ -8,7 +8,9 @@ import {VitePWA} from 'vite-plugin-pwa';
 export default defineConfig(() => {
   // GitHub Pages serves this project from a repository subpath. Keep local
   // development at `/`, but emit correct asset and PWA URLs in Actions builds.
-  const base = process.env.GITHUB_ACTIONS === 'true' ? '/STEM-Saathi/' : '/';
+  // The Pages path is the repository name (e.g. /STEM-Saathi-v2/), so it keeps working if the repo is renamed.
+  const repoName = process.env.GITHUB_REPOSITORY?.split('/')[1];
+  const base = process.env.GITHUB_ACTIONS === 'true' ? `/${repoName || 'STEM-Saathi'}/` : '/';
 
   return {
     base,
